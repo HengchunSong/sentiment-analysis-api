@@ -1,59 +1,53 @@
-# app.py (Legacy fix for v1.0+)
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+from langchain_ollama import ChatOllama
 from langchain_core.prompts import PromptTemplate
-from langchain_community.llms import HuggingFaceHub
-from langchain_classic.chains import LLMChain  # Updated: Use _classic here
-import os
+from langchain_core.output_parsers import StrOutputParser
+import json, re
 
-app = FastAPI()
+app = FastAPI(title="Sentiment Analysis API with Llama 3.2 3B (Ollama)")
 
-# Load HuggingFace API token from environment variable
-hf_token = os.getenv("HUGGINGFACEHUB_API_TOKEN")
-if not hf_token:
-    raise ValueError("HUGGINGFACEHUB_API_TOKEN environment variable is not set")
-
-# Initialize the LLM (use a generative model like gpt2 for explanations)
-llm = HuggingFaceHub(
-    repo_id="gpt2",  # Better for text generation than classification models
-    huggingfacehub_api_token=hf_token,
-    model_kwargs={"temperature": 0.5, "max_length": 150}
+# Connect to Ollama on host (works with --network=host)
+llm = ChatOllama(
+    model="llama3.2:3b",
+    base_url="http://192.168.1.158:11434",
+    temperature=0.3
 )
 
-# Define the prompt template
-prompt = PromptTemplate(
-    input_variables=["text"],
-    template="Analyze the sentiment of the following text: '{text}'. Classify it as positive, negative, or neutral. Provide a short explanation. Respond in this exact format:\nSentiment: [label]\nExplanation: [reason]"
-)
+# ← THIS IS THE FIXED PROMPT (note the double {{ and }} around the JSON example)
+prompt = PromptTemplate.from_template("""
+You are a sentiment analysis expert.
+Analyze this text and respond with ONLY valid JSON (no markdown, no extra text).
 
-# Create the chain (unchanged)
-chain = LLMChain(llm=llm, prompt=prompt)
+Text: {text}
+
+Response format:
+{{
+  "sentiment": "positive" | "negative" | "neutral",
+  "explanation": "short natural language reason in one sentence"
+}}
+""")
+
+chain = prompt | llm | StrOutputParser()
 
 class TextInput(BaseModel):
     text: str
 
 @app.post("/analyze-sentiment")
 async def analyze_sentiment(input: TextInput):
-    if not input.text:
-        raise HTTPException(status_code=400, detail="Text input is required")
+    if not input.text.strip():
+        raise HTTPException(status_code=400, detail="Text is required")
     
     try:
-        result = chain.run(input.text)
-        # Parse the result based on prompted format
-        lines = result.strip().split("\n")
-        sentiment = lines[0].replace("Sentiment:", "").strip().lower() if lines else "neutral"
-        explanation = " ".join(lines[1:]).replace("Explanation:", "").strip() if len(lines) > 1 else "No explanation provided."
-        
-        if sentiment not in ["positive", "negative", "neutral"]:
-            sentiment = "neutral"
-        
-        return {
-            "sentiment": sentiment,
-            "explanation": explanation
-        }
+        raw = chain.invoke({"text": input.text})
+        match = re.search(r"\{.*\}", raw, re.DOTALL)
+        if match:
+            return json.loads(match.group())
+        else:
+            return {"sentiment": "neutral", "explanation": "Failed to parse response"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/")
 def root():
-    return {"message": "Sentiment Analysis API is running!"}
+    return {"message": "Sentiment API running with local Ollama + llama3.2:3b"}
