@@ -17,7 +17,7 @@ A FastAPI web service that analyzes text sentiment using **Llama 3.2 3B** runnin
 ```bash
 pip install -r requirements.txt
 uvicorn llm:app --reload"
-[200~Docker/Podman run
+Docker/Podman run
 Bash# Make Ollama listen on all interfaces
 export OLLAMA_HOST=0.0.0.0
 
